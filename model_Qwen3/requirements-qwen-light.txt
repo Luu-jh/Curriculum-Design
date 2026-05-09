@@ -1,0 +1,8 @@
+# Qwen2.5-0.5B-Instruct lightweight local inference dependencies.
+# Install torch separately if your CUDA/CPU environment needs a specific wheel.
+
+transformers>=4.51.0
+accelerate>=0.33.0
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+protobuf>=4.25.0

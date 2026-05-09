@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>校园舆情分析大屏</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2.1.0/dist/echarts-wordcloud.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; display: flex; height: 100vh; }
+        .sidebar { width: 200px; background-color: #2c3e50; color: white; display: flex; flex-direction: column; }
+        .logo { padding: 20px; font-size: 18px; font-weight: bold; text-align: center; border-bottom: 1px solid #34495e; }
+        .nav-item { padding: 15px 20px; cursor: pointer; transition: 0.3s; }
+        .nav-item:hover, .nav-item.active { background-color: #34495e; border-left: 4px solid #3498db; }
+        .main-content { flex: 1; padding: 20px; overflow-y: auto; }
+        .page { display: none; }
+        .page.active { display: block; }
+        .dashboard-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .card { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .chart-container { height: 350px; width: 100%; }
+        .hot-list { list-style: none; padding: 0; margin: 0; }
+        .hot-item { padding: 10px 0; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; align-items: flex-start; }
+        .hot-item:last-child { border-bottom: none; }
+        .hot-content { flex: 1; margin-right: 15px; font-size: 14px; color: #333; }
+        .hot-meta { display: flex; flex-direction: column; align-items: flex-end; font-size: 12px; }
+        .comments { color: #888; margin-bottom: 5px; }
+        .tag { padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+        .tag-正向 { background-color: #e6f4ea; color: #1e8e3e; }
+        .tag-负向 { background-color: #fce8e6; color: #d93025; }
+        .tag-中性 { background-color: #e8f0fe; color: #1a73e8; }
+        .tag-未分类 { background-color: #f1f3f4; color: #5f6368; }
+        .btn-group { text-align: center; margin-bottom: 10px; }
+        .btn { padding: 5px 15px; cursor: pointer; border: 1px solid #ccc; background: white; }
+        .btn.active { background: #3498db; color: white; border-color: #3498db; }
+        .chart-tip { margin: 0 0 8px 0; font-size: 12px; color: #5f6368; text-align: center; }
+        .agent-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+        .agent-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .agent-btn { padding: 7px 12px; border: 1px solid #d6dde5; background: #fff; color: #34495e; border-radius: 6px; cursor: pointer; }
+        .agent-btn.active { background: #3498db; color: #fff; border-color: #3498db; }
+        .agent-btn:disabled { opacity: .65; cursor: not-allowed; }
+        .agent-status { margin-bottom: 14px; color: #6b7280; font-size: 13px; min-height: 20px; }
+        .agent-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; }
+        .agent-stack { display: flex; flex-direction: column; gap: 20px; }
+        .agent-summary { color: #2c3e50; line-height: 1.8; margin: 0; }
+        .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+        .metric-box { background: #f7f9fb; border: 1px solid #edf1f5; border-radius: 6px; padding: 10px; min-height: 58px; }
+        .metric-label { display: block; color: #7f8c8d; font-size: 12px; margin-bottom: 6px; }
+        .metric-value { display: block; color: #22313f; font-size: 18px; font-weight: 700; word-break: break-word; }
+        .risk-badge { display: inline-block; min-width: 34px; text-align: center; padding: 4px 8px; border-radius: 6px; font-weight: 700; }
+        .risk-low { background: #e6f4ea; color: #1e8e3e; }
+        .risk-mid { background: #fff4d6; color: #9a6700; }
+        .risk-high { background: #fce8e6; color: #d93025; }
+        .topic-item, .risk-item, .post-item { border-bottom: 1px solid #eef2f5; padding: 12px 0; }
+        .topic-item:last-child, .risk-item:last-child, .post-item:last-child { border-bottom: none; }
+        .item-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; color: #22313f; font-weight: 700; }
+        .item-meta { color: #7f8c8d; font-size: 12px; white-space: nowrap; }
+        .item-desc { color: #4b5563; line-height: 1.6; margin: 8px 0 0; font-size: 14px; }
+        .evidence-list { margin: 8px 0 0; padding-left: 18px; color: #5f6368; font-size: 13px; line-height: 1.6; }
+        .suggestion-list { margin: 0; padding-left: 20px; color: #34495e; line-height: 1.8; }
+        .empty-state { color: #8a97a5; text-align: center; padding: 18px 0; }
+        .qa-panel { margin-bottom: 20px; }
+        .qa-input-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: stretch; }
+        .qa-input { min-height: 74px; resize: vertical; border: 1px solid #d6dde5; border-radius: 6px; padding: 10px 12px; font-size: 14px; line-height: 1.6; color: #22313f; font-family: inherit; }
+        .qa-submit { min-width: 96px; border: 1px solid #3498db; background: #3498db; color: #fff; border-radius: 6px; cursor: pointer; font-weight: 700; }
+        .qa-submit:disabled { opacity: .65; cursor: not-allowed; }
+        .qa-answer { margin-top: 14px; background: #f7f9fb; border: 1px solid #edf1f5; border-radius: 6px; padding: 12px; color: #2c3e50; line-height: 1.8; white-space: pre-wrap; min-height: 52px; }
+        .qa-meta { margin-top: 8px; color: #7f8c8d; font-size: 12px; }
+        .qa-evidence { margin-top: 12px; }
+        .qa-evidence-title { color: #34495e; font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+        @media (max-width: 1100px) {
+            .dashboard-grid, .agent-grid { grid-template-columns: 1fr; }
+            .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .qa-input-row { grid-template-columns: 1fr; }
+            .qa-submit { height: 40px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo">数据中台</div>
+        <div class="nav-item active" onclick="switchPage('dashboard', event)">数据看板</div>
+        <div class="nav-item" onclick="switchPage('agent', event)">智能体分析</div>
+    </div>
+
+    <div class="main-content">
+        <div id="page-dashboard" class="page active">
+            <h2 style="margin-top:0;">大盘数据洞察</h2>
+            <div class="dashboard-grid">
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    <div class="card">
+                        <div class="btn-group">
+                            <button class="btn active" onclick="loadLineChart('week', this)">近一周</button>
+                            <button class="btn" onclick="loadLineChart('month', this)">近一月</button>
+                        </div>
+                        <div id="line-chart" class="chart-container"></div>
+                    </div>
+                    <div class="card">
+                        <div id="wordcloud-chart" class="chart-container" style="height: 300px;"></div>
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    <div class="card">
+                        <p class="chart-tip">点击饼图分块，可联动查看该一级分类下的二级分类柱状图。</p>
+                        <div id="pie-chart" class="chart-container" style="height: 250px;"></div>
+                    </div>
+
+                    <div class="card">
+                        <div id="category2-chart" class="chart-container" style="height: 260px;"></div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top:0; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px;">今日话题热榜</h3>
+                        <ul class="hot-list">
+                            {% for post in hot_posts %}
+                            <li class="hot-item">
+                                <div class="hot-content">{{ post.snippet }}</div>
+                                <div class="hot-meta">
+                                    <span class="comments">互动 {{ post.comments }}</span>
+                                    <span class="tag tag-{{ post.sentiment }}">{{ post.sentiment }}</span>
+                                </div>
+                            </li>
+                            {% else %}
+                            <li>暂无数据，请等待爬虫运行。</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-agent" class="page">
+            <div class="agent-toolbar">
+                <h2 style="margin:0;">智能体深度分析</h2>
+                <div class="agent-actions">
+                    <button class="agent-btn agent-period-btn" data-period="today" onclick="loadAgentReport('today', this)">今日</button>
+                    <button class="agent-btn agent-period-btn active" data-period="week" onclick="loadAgentReport('week', this)">近7天</button>
+                    <button class="agent-btn agent-period-btn" data-period="month" onclick="loadAgentReport('month', this)">近30天</button>
+                    <button id="agent-refresh-btn" class="agent-btn" onclick="refreshAgentReport()">刷新分析</button>
+                </div>
+            </div>
+
+            <div id="agent-status" class="agent-status">等待载入智能体报告。</div>
+
+            <div class="card qa-panel">
+                <h3 style="margin-top:0;">大模型问答</h3>
+                <div class="qa-input-row">
+                    <textarea id="agent-question-input" class="qa-input" maxlength="300" placeholder="输入问题"></textarea>
+                    <button id="agent-ask-btn" class="qa-submit" onclick="askAgentQuestion()">提问</button>
+                </div>
+                <div id="agent-answer" class="qa-answer">暂无问答内容。</div>
+                <div id="agent-answer-meta" class="qa-meta"></div>
+                <div id="agent-answer-evidence" class="qa-evidence"></div>
+            </div>
+
+            <div class="agent-grid">
+                <div class="agent-stack">
+                    <div class="card">
+                        <div class="item-title">
+                            <span>总体研判</span>
+                            <span id="agent-risk-level" class="risk-badge risk-low">低</span>
+                        </div>
+                        <p id="agent-summary" class="agent-summary">暂无报告。</p>
+                        <div class="metric-grid">
+                            <div class="metric-box">
+                                <span class="metric-label">帖子数量</span>
+                                <span id="agent-post-count" class="metric-value">0</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-label">情绪主项</span>
+                                <span id="agent-sentiment-top" class="metric-value">暂无</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-label">分类主项</span>
+                                <span id="agent-category-top" class="metric-value">暂无</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-label">平均热度</span>
+                                <span id="agent-average-heat" class="metric-value">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top:0;">热点话题</h3>
+                        <div id="agent-topics"></div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top:0;">代表帖子</h3>
+                        <div id="agent-posts"></div>
+                    </div>
+                </div>
+
+                <div class="agent-stack">
+                    <div class="card">
+                        <h3 style="margin-top:0;">风险提醒</h3>
+                        <div id="agent-risks"></div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-top:0;">处置建议</h3>
+                        <ul id="agent-suggestions" class="suggestion-list"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchPage(pageId, event) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById('page-' + pageId).classList.add('active');
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('active');
+            }
+            if (pageId === 'agent') {
+                loadAgentReport(agentState.period);
+            }
+        }
+
+        const lineChart = echarts.init(document.getElementById('line-chart'));
+        const pieChart = echarts.init(document.getElementById('pie-chart'));
+        const category2Chart = echarts.init(document.getElementById('category2-chart'));
+        const wordCloudChart = echarts.init(document.getElementById('wordcloud-chart'));
+        const agentState = { period: 'week', loaded: false };
+
+        function fetchAndRenderChart(url, chartInstance) {
+            chartInstance.showLoading();
+            fetch(url)
+                .then(response => response.json())
+                .then(options => {
+                    chartInstance.hideLoading();
+                    chartInstance.setOption(options, true);
+                })
+                .catch(err => {
+                    chartInstance.hideLoading();
+                    console.error("图表加载失败:", err);
+                });
+        }
+
+        function loadLineChart(period, btnElement) {
+            if (btnElement) {
+                document.querySelectorAll('.btn-group .btn').forEach(b => b.classList.remove('active'));
+                btnElement.classList.add('active');
+            }
+            fetchAndRenderChart('/api/chart/line?period=' + period, lineChart);
+        }
+
+        function loadCategory2Chart(category1) {
+            const url = category1
+                ? '/api/chart/category2?category1=' + encodeURIComponent(category1)
+                : '/api/chart/category2';
+            fetchAndRenderChart(url, category2Chart);
+        }
+
+        function loadAgentReport(period, btnElement) {
+            agentState.period = period || agentState.period || 'week';
+            document.querySelectorAll('.agent-period-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.period === agentState.period);
+            });
+            if (btnElement) {
+                btnElement.classList.add('active');
+            }
+
+            const status = document.getElementById('agent-status');
+            status.textContent = '正在读取智能体报告...';
+            fetch('/api/agent/report?period=' + encodeURIComponent(agentState.period))
+                .then(response => response.json())
+                .then(report => {
+                    renderAgentReport(report);
+                    agentState.loaded = true;
+                })
+                .catch(err => {
+                    console.error('智能体报告加载失败:', err);
+                    status.textContent = '智能体报告加载失败，请稍后重试。';
+                });
+        }
+
+        function refreshAgentReport() {
+            const refreshBtn = document.getElementById('agent-refresh-btn');
+            const status = document.getElementById('agent-status');
+            refreshBtn.disabled = true;
+            status.textContent = '正在基于最新数据库刷新智能体分析，大模型不可用时会自动降级...';
+            fetch('/api/agent/refresh?period=' + encodeURIComponent(agentState.period) + '&llm=1', { method: 'POST' })
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(result => {
+                    if (!result.ok) {
+                        throw new Error(result.data.message || '刷新失败');
+                    }
+                    renderAgentReport(result.data);
+                })
+                .catch(err => {
+                    console.error('智能体报告刷新失败:', err);
+                    status.textContent = err.message || '智能体报告刷新失败。';
+                })
+                .finally(() => {
+                    refreshBtn.disabled = false;
+                });
+        }
+
+        function askAgentQuestion() {
+            const input = document.getElementById('agent-question-input');
+            const askBtn = document.getElementById('agent-ask-btn');
+            const answerBox = document.getElementById('agent-answer');
+            const metaBox = document.getElementById('agent-answer-meta');
+            const evidenceBox = document.getElementById('agent-answer-evidence');
+            const question = input.value.trim();
+
+            if (!question) {
+                answerBox.textContent = '问题不能为空。';
+                metaBox.textContent = '';
+                evidenceBox.innerHTML = '';
+                return;
+            }
+
+            askBtn.disabled = true;
+            answerBox.textContent = '正在调用 Qwen2.5-0.5B 生成回答，首次加载可能需要较久...';
+            metaBox.textContent = '';
+            evidenceBox.innerHTML = '';
+
+            fetch('/api/agent/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question, period: agentState.period })
+            })
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(result => {
+                    if (!result.ok) {
+                        throw new Error(result.data.message || '问答失败');
+                    }
+                    renderAgentAnswer(result.data);
+                })
+                .catch(err => {
+                    console.error('智能体问答失败:', err);
+                    answerBox.textContent = err.message || '智能体问答失败。';
+                    metaBox.textContent = '';
+                    evidenceBox.innerHTML = '';
+                })
+                .finally(() => {
+                    askBtn.disabled = false;
+                });
+        }
+
+        function renderAgentAnswer(result) {
+            const answerBox = document.getElementById('agent-answer');
+            const metaBox = document.getElementById('agent-answer-meta');
+            const evidenceBox = document.getElementById('agent-answer-evidence');
+            const sourceText = result.source === 'qwen'
+                ? 'Qwen2.5-0.5B'
+                : (result.source === 'rules' ? '规则检索' : '规则降级');
+
+            answerBox.textContent = result.answer || '暂无回答。';
+            metaBox.textContent = sourceText + ' · ' + (result.period_label || '') + ' · ' + (result.created_at || '');
+
+            const posts = result.evidence_posts || [];
+            if (!posts.length) {
+                evidenceBox.innerHTML = '';
+                return;
+            }
+            evidenceBox.innerHTML = `
+                <div class="qa-evidence-title">参考帖子</div>
+                <ul class="evidence-list">
+                    ${posts.slice(0, 5).map(post => `
+                        <li>${escapeHtml(post.snippet || '')}</li>
+                    `).join('')}
+                </ul>
+            `;
+        }
+
+        function renderAgentReport(report) {
+            const overview = report.overview || {};
+            const metrics = report.metrics || {};
+            const riskLevel = overview.risk_level || '低';
+            document.getElementById('agent-summary').textContent = overview.summary || '暂无报告。';
+            document.getElementById('agent-post-count').textContent = report.post_count || 0;
+            document.getElementById('agent-sentiment-top').textContent = topDistributionText(metrics.sentiment_distribution);
+            document.getElementById('agent-category-top').textContent = topDistributionText(metrics.category_distribution);
+            document.getElementById('agent-average-heat').textContent = metrics.average_heat || 0;
+
+            const riskBadge = document.getElementById('agent-risk-level');
+            riskBadge.textContent = riskLevel;
+            riskBadge.className = 'risk-badge ' + riskClass(riskLevel);
+
+            renderTopics(report.hot_topics || []);
+            renderRisks(report.risks || []);
+            renderSuggestions(report.suggestions || []);
+            renderRepresentativePosts(report.representative_posts || []);
+
+            const sourceText = report.source === 'llm' ? 'Qwen 智能体' : '规则智能体';
+            const timeText = report.created_at || report.generated_at || '';
+            const fallbackText = report.status === 'fallback' ? '，LLM 已降级' : '';
+            const liveText = report.sync_status === 'live_preview' ? '，已同步最新数据' : '';
+            document.getElementById('agent-status').textContent =
+                sourceText + ' · ' + (report.period_label || '') + ' · ' + timeText + fallbackText + liveText;
+        }
+
+        function renderTopics(topics) {
+            const container = document.getElementById('agent-topics');
+            if (!topics.length) {
+                container.innerHTML = '<div class="empty-state">暂无热点话题。</div>';
+                return;
+            }
+            container.innerHTML = topics.map(topic => `
+                <div class="topic-item">
+                    <div class="item-title">
+                        <span>${escapeHtml(topic.topic || '未命名话题')}</span>
+                        <span class="item-meta">${escapeHtml(String(topic.count || 0))} 条</span>
+                    </div>
+                    <p class="item-desc">${escapeHtml(topic.reason || '')}</p>
+                    ${renderEvidence(topic.evidence)}
+                </div>
+            `).join('');
+        }
+
+        function renderRisks(risks) {
+            const container = document.getElementById('agent-risks');
+            if (!risks.length) {
+                container.innerHTML = '<div class="empty-state">暂无风险提醒。</div>';
+                return;
+            }
+            container.innerHTML = risks.map(risk => `
+                <div class="risk-item">
+                    <div class="item-title">
+                        <span>${escapeHtml(risk.title || '风险提醒')}</span>
+                        <span class="risk-badge ${riskClass(risk.level || '低')}">${escapeHtml(risk.level || '低')}</span>
+                    </div>
+                    <p class="item-desc">${escapeHtml(risk.description || '')}</p>
+                    <p class="item-desc"><strong>建议：</strong>${escapeHtml(risk.suggestion || '')}</p>
+                    ${renderEvidence(risk.evidence)}
+                </div>
+            `).join('');
+        }
+
+        function renderSuggestions(suggestions) {
+            const container = document.getElementById('agent-suggestions');
+            if (!suggestions.length) {
+                container.innerHTML = '<li>暂无处置建议。</li>';
+                return;
+            }
+            container.innerHTML = suggestions.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+        }
+
+        function renderRepresentativePosts(posts) {
+            const container = document.getElementById('agent-posts');
+            if (!posts.length) {
+                container.innerHTML = '<div class="empty-state">暂无代表帖子。</div>';
+                return;
+            }
+            container.innerHTML = posts.map(post => `
+                <div class="post-item">
+                    <div class="item-title">
+                        <span>${escapeHtml(post.snippet || '')}</span>
+                        <span class="item-meta">热度 ${escapeHtml(String(post.heat || 0))}</span>
+                    </div>
+                    <p class="item-desc">
+                        ${escapeHtml(post.create_time || '')}
+                        · ${escapeHtml(post.display_category_1 || post.llm_category_1 || post.raw_category || '未分类')}
+                        · ${escapeHtml(post.sentiment || '未分类')}
+                    </p>
+                </div>
+            `).join('');
+        }
+
+        function renderEvidence(evidence) {
+            if (!Array.isArray(evidence) || !evidence.length) {
+                return '';
+            }
+            return '<ul class="evidence-list">' + evidence
+                .slice(0, 3)
+                .map(item => `<li>${escapeHtml(item)}</li>`)
+                .join('') + '</ul>';
+        }
+
+        function topDistributionText(distribution) {
+            if (!distribution) {
+                return '暂无';
+            }
+            const entries = Object.entries(distribution).sort((a, b) => Number(b[1]) - Number(a[1]));
+            if (!entries.length) {
+                return '暂无';
+            }
+            return entries[0][0] + ' ' + entries[0][1];
+        }
+
+        function riskClass(level) {
+            if (level === '高') {
+                return 'risk-high';
+            }
+            if (level === '中') {
+                return 'risk-mid';
+            }
+            return 'risk-low';
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        pieChart.on('click', function (params) {
+            if (params && params.name) {
+                loadCategory2Chart(params.name);
+            }
+        });
+
+        window.onload = function() {
+            loadLineChart('week');
+            fetchAndRenderChart('/api/chart/pie', pieChart);
+            loadCategory2Chart();
+            fetchAndRenderChart('/api/chart/wordcloud', wordCloudChart);
+
+            window.addEventListener('resize', function() {
+                lineChart.resize();
+                pieChart.resize();
+                category2Chart.resize();
+                wordCloudChart.resize();
+            });
+        };
+    </script>
+</body>
+</html>
