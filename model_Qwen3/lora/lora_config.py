@@ -13,12 +13,12 @@ BASE_DIR = LORA_DIR.parents[1]
 # -----------------------------
 
 # LoRA 训练时使用的基础模型目录
-# 建议保留原始 Hugging Face 模型目录用于训练
-QWEN_LORA_TRAIN_BASE_MODEL_DIR = BASE_DIR / "model_Qwen3" / "Qwen3-4B-Instruct-2507"
+# RTX 3050 Ti 4GB 显存下优先使用 0.5B 模型，避免 4B 训练显存不足
+QWEN_LORA_TRAIN_BASE_MODEL_DIR = BASE_DIR / "model_Qwen3" / "Qwen2.5-0.5B-Instruct"
 
 # LoRA 推理时使用的基础模型目录
-# 默认使用量化后的 4bit 模型，以减少推理显存占用
-QWEN_LORA_INFERENCE_BASE_MODEL_DIR = BASE_DIR / "model_Qwen3" / "Qwen3-4B-Instruct-2507-bnb-4bit"
+# 必须与训练 adapter 时的基础模型保持一致
+QWEN_LORA_INFERENCE_BASE_MODEL_DIR = BASE_DIR / "model_Qwen3" / "Qwen2.5-0.5B-Instruct"
 
 # LoRA 训练数据目录
 QWEN_LORA_DATA_DIR = LORA_DIR / "data"
@@ -30,7 +30,7 @@ QWEN_LORA_TRAIN_FILE = QWEN_LORA_DATA_DIR / "train.jsonl"
 QWEN_LORA_VALID_FILE = QWEN_LORA_DATA_DIR / "valid.jsonl"
 
 # LoRA 适配器输出目录
-QWEN_LORA_ADAPTER_DIR = LORA_DIR / "output" / "campus_classifier"
+QWEN_LORA_ADAPTER_DIR = LORA_DIR / "output" / "campus_classifier_real_posts"
 
 
 # -----------------------------
@@ -38,7 +38,9 @@ QWEN_LORA_ADAPTER_DIR = LORA_DIR / "output" / "campus_classifier"
 # -----------------------------
 
 # 单条样本最大 token 长度
-TRAIN_MAX_LENGTH = 512
+# 分类 prompt 本身包含完整 LABEL_SCHEMA，短帖样本也会超过 512 token。
+# 0.5B 基座在 RTX 3050 Ti 4GB 上用 batch size 1 训练时，768 是更稳妥的默认值。
+TRAIN_MAX_LENGTH = 768
 
 # 训练轮数
 TRAIN_EPOCHS = 3

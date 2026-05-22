@@ -23,7 +23,7 @@
 - 中文分词：jieba
 - 情感分析：SnowNLP
 - 本地大模型：Qwen2.5-0.5B-Instruct + Transformers + PyTorch
-- 可选微调：PEFT/LoRA
+- 可选微调：PEFT/LoRA/QLoRA + bitsandbytes
 
 ## 目录结构
 
@@ -33,7 +33,7 @@ core/           数据模型与校园墙爬虫
 visual/         Flask 路由与图表数据生成
 templates/      前端页面模板
 temolates/      历史模板目录
-model_Qwen3/    轻量模型说明、依赖与 LoRA 配置，模型权重不提交
+model_Qwen3/    轻量模型说明、量化脚本、LoRA/QLoRA 微调配置，模型权重不提交
 test/           诊断脚本
 main.py         项目入口
 config.example.py 示例配置文件
@@ -104,6 +104,77 @@ $env:QWEN_CLASSIFIER_MODEL_DIR="D:\path\to\Qwen2.5-0.5B-Instruct"
 
 如果只想运行规则分析和数据看板，可以在 `config.py` 中关闭大模型相关开关。
 
+## LoRA 微调
+
+项目已经支持基于本地 `Qwen2.5-0.5B-Instruct` 的校园墙分类 LoRA/QLoRA 微调。当前在 Windows + Python 3.13 + RTX 3050 Ti Laptop GPU 环境下验证通过。
+
+当前已验证的 IDE 解释器：
+
+```text
+C:\Users\罗加海\AppData\Local\Programs\Python\Python313\python.exe
+```
+
+当前已验证的核心依赖：
+
+```text
+torch 2.12.0+cu126
+peft 0.19.1
+transformers 5.8.0
+accelerate 1.13.0
+bitsandbytes 0.49.2
+```
+
+LoRA 相关文件集中在：
+
+```text
+model_Qwen3/lora/
+```
+
+核心文件：
+
+```text
+model_Qwen3/lora/lora_config.py              LoRA 路径与默认训练超参数
+model_Qwen3/lora/train_qlora.py              QLoRA 微调入口
+model_Qwen3/lora/evaluate_lora_comparison.py 微调前后效果对比
+model_Qwen3/lora/build_real_lora_data.py      从真实校园墙 CSV 生成人工标注数据
+model_Qwen3/lora/build_demo_lora_data.py      示例训练/验证数据生成
+model_Qwen3/lora/data/train.jsonl             训练集
+model_Qwen3/lora/data/valid.jsonl             验证集
+model_Qwen3/lora/data/real_label_manifest.json 真实标注数据统计
+model_Qwen3/lora/output/campus_classifier_real_posts/ 当前 LoRA adapter 输出目录
+```
+
+推荐从项目根目录执行：
+
+```powershell
+cd D:\python\大三下课设
+python model_Qwen3\lora\build_real_lora_data.py
+python model_Qwen3\lora\train_qlora.py --base-model model_Qwen3\Qwen2.5-0.5B-Instruct --train-batch-size 1 --eval-batch-size 1 --gradient-accumulation-steps 8 --max-length 768 --epochs 3 --output-dir model_Qwen3\lora\output\campus_classifier_real_posts
+```
+
+微调前后对比：
+
+```powershell
+python model_Qwen3\lora\evaluate_lora_comparison.py --json-output model_Qwen3\lora\output\real_posts_comparison.json
+```
+
+当前真实标注数据规模为训练集 147 条、验证集 56 条；本地验证结果为 base 完全命中率 16.1%，LoRA 完全命中率 41.1%。
+
+在 IDE 中直接运行时，建议配置：
+
+```text
+Script path: D:\python\大三下课设\model_Qwen3\lora\train_qlora.py
+Working directory: D:\python\大三下课设
+Python interpreter: C:\Users\罗加海\AppData\Local\Programs\Python\Python313\python.exe
+```
+
+更多说明见：
+
+```text
+model_Qwen3/lora/README_lora_finetuning.md
+model_Qwen3/lora/LORA_STRUCTURE_AND_FLOW.md
+```
+
 ## 安全说明
 
-`config.py`、本地数据库导出、爬虫原始数据、模型权重和运行日志不会提交到仓库。提交到 GitHub 的是可复现的项目代码和示例配置，真实密码、Cookie、模型文件需要在本地自行配置。
+`config.py`、本地数据库导出、爬虫原始数据、模型权重、LoRA 输出权重和运行日志不会提交到仓库。提交到 GitHub 的是可复现的项目代码和示例配置，真实密码、Cookie、模型文件需要在本地自行配置。

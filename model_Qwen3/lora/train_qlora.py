@@ -16,11 +16,15 @@ If needed, install dependencies first:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
-import lora_config
+try:
+    from model_Qwen3.lora import lora_config
+except ModuleNotFoundError:
+    import lora_config
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BASE_MODEL = Path(lora_config.QWEN_LORA_TRAIN_BASE_MODEL_DIR)
 DEFAULT_TRAIN_FILE = Path(lora_config.QWEN_LORA_TRAIN_FILE)
@@ -80,8 +84,9 @@ def import_dependencies():
             TrainingArguments,
         )
     except ModuleNotFoundError as exc:
+        missing_name = exc.name or str(exc)
         raise SystemExit(
-            f"Missing dependency: {exc.name}\n"
+            f"Missing dependency: {missing_name}\n"
             "Please install dependencies first:\n"
             "  .\\.venv\\Scripts\\python.exe -m pip install -r model_Qwen3\\lora\\requirements-qwen-lora.txt"
         ) from exc
@@ -146,13 +151,6 @@ def validate_sample(sample: dict, path: Path, line_no: int):
         raise ValueError(f"{path}:{line_no} 二级分类不在一级分类允许范围内: {category_2}")
 
 
-@dataclass
-class SampleEncoding:
-    input_ids: list[int]
-    attention_mask: list[int]
-    labels: list[int]
-
-
 class CommentJsonlSFTDataset:
     def __init__(self, samples, tokenizer, max_length: int):
         self.features = [build_feature(sample, tokenizer, max_length) for sample in samples]
@@ -188,14 +186,17 @@ def build_feature(sample: dict, tokenizer, max_length: int):
     full_text = prompt_text + answer_text + eos
 
     prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
-    full = tokenizer(
-        full_text,
-        add_special_tokens=False,
-        truncation=True,
-        max_length=max_length,
-    )
+    full = tokenizer(full_text, add_special_tokens=False)
     input_ids = full["input_ids"]
     attention_mask = full["attention_mask"]
+    if len(input_ids) > max_length:
+        answer_ids = tokenizer(answer_text + eos, add_special_tokens=False)["input_ids"]
+        raise ValueError(
+            "样本长度超过 --max-length，截断会破坏 assistant JSON 答案。"
+            f"当前长度={len(input_ids)}，max_length={max_length}，"
+            f"prompt_tokens={len(prompt_ids)}，answer_tokens={len(answer_ids)}。"
+            "请增大 --max-length 或缩短输入 prompt。"
+        )
 
     prompt_length = min(len(prompt_ids), len(input_ids))
     labels = [-100] * prompt_length + input_ids[prompt_length:]
@@ -248,6 +249,12 @@ def build_model_and_tokenizer(args, deps):
         _TrainingArguments,
     ) = deps
 
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "当前 train_qlora.py 使用 bitsandbytes 4bit QLoRA，需要可用 CUDA。"
+            "如果只能使用 CPU，请改用普通 LoRA 训练脚本或更小模型。"
+        )
+
     quant_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -271,6 +278,8 @@ def build_model_and_tokenizer(args, deps):
         local_files_only=True,
     )
     model = prepare_model_for_kbit_training(model)
+    if hasattr(model, "config"):
+        model.config.use_cache = False
 
     peft_config = LoraConfig(
         r=args.lora_r,
@@ -283,6 +292,39 @@ def build_model_and_tokenizer(args, deps):
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
     return model, tokenizer
+
+
+def build_training_arguments(args, torch, TrainingArguments):
+    """Build TrainingArguments across Transformers versions."""
+    parameters = inspect.signature(TrainingArguments.__init__).parameters
+    kwargs = {
+        "output_dir": str(args.output_dir),
+        "overwrite_output_dir": True,
+        "num_train_epochs": args.epochs,
+        "per_device_train_batch_size": args.train_batch_size,
+        "per_device_eval_batch_size": args.eval_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "learning_rate": args.learning_rate,
+        "warmup_ratio": args.warmup_ratio,
+        "weight_decay": args.weight_decay,
+        "logging_steps": args.logging_steps,
+        "save_strategy": args.save_strategy,
+        "save_steps": args.save_steps,
+        "eval_steps": args.eval_steps,
+        "bf16": torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        "fp16": torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        "report_to": "none",
+        "remove_unused_columns": False,
+        "load_best_model_at_end": False,
+    }
+
+    if "eval_strategy" in parameters:
+        kwargs["eval_strategy"] = args.eval_strategy
+    else:
+        kwargs["evaluation_strategy"] = args.eval_strategy
+
+    supported_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+    return TrainingArguments(**supported_kwargs)
 
 
 def main():
@@ -333,27 +375,7 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    training_args = TrainingArguments(
-        output_dir=str(args.output_dir),
-        overwrite_output_dir=True,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.train_batch_size,
-        per_device_eval_batch_size=args.eval_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate,
-        warmup_ratio=args.warmup_ratio,
-        weight_decay=args.weight_decay,
-        logging_steps=args.logging_steps,
-        save_strategy=args.save_strategy,
-        save_steps=args.save_steps,
-        eval_strategy=args.eval_strategy,
-        eval_steps=args.eval_steps,
-        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
-        report_to="none",
-        remove_unused_columns=False,
-        load_best_model_at_end=False,
-    )
+    training_args = build_training_arguments(args, torch, TrainingArguments)
 
     trainer = Trainer(
         model=model,

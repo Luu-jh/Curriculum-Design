@@ -68,22 +68,24 @@ class QwenPostClassifier:
             for post in posts:
                 try:
                     category_1, category_2 = self.classify(post.content, post.category)
-                    post.llm_category_1 = category_1
-                    post.llm_category_2 = category_2
-                    stats["成功"] += 1
-                    print(f"  Qwen分类成功：{post.id} -> {category_1} / {category_2}")
                 except Exception as exc:
-                    post.llm_category_1 = "其他"
-                    post.llm_category_2 = "其他"
                     stats["失败"] += 1
-                    print(f"  Qwen分类失败：{post.id}: {exc}")
+                    print(f"  Qwen分类失败，保留为未分类以便下轮重试：{post.id}: {exc}")
+                    db.session.rollback()
+                    continue
 
-            try:
-                db.session.commit()
-            except Exception as exc:
-                db.session.rollback()
-                print(f"Qwen分类：写入数据库失败，已回滚本批 {len(posts)} 条: {exc}")
-                return {"total": 0, "成功": 0, "失败": len(posts)}
+                post.llm_category_1 = category_1
+                post.llm_category_2 = category_2
+
+                try:
+                    db.session.commit()
+                except Exception as exc:
+                    db.session.rollback()
+                    stats["失败"] += 1
+                    print(f"  Qwen分类写入失败，已回滚本条：{post.id}: {exc}")
+                else:
+                    stats["成功"] += 1
+                    print(f"  Qwen分类成功并已写入数据库：{post.id} -> {category_1} / {category_2}")
 
             result = {"total": len(posts), "成功": stats["成功"], "失败": stats["失败"]}
             print(f"Qwen分类完成：处理 {result['total']} 条，成功 {result['成功']} 条，失败 {result['失败']} 条。")
@@ -230,22 +232,25 @@ class QwenPostClassifier:
         return json.loads(match.group(0))
 
     def _pending_count(self):
-        return Post.query.filter(
-            (Post.llm_category_1.is_(None))
-            | (Post.llm_category_1 == "")
-            | (Post.llm_category_1 == "未分类")
-        ).count()
+        return Post.query.filter(self._pending_filter()).count()
 
     def _load_pending_posts(self, limit):
         return (
-            Post.query.filter(
-                (Post.llm_category_1.is_(None))
-                | (Post.llm_category_1 == "")
-                | (Post.llm_category_1 == "未分类")
-            )
+            Post.query.filter(self._pending_filter())
             .order_by(Post.create_time.desc())
             .limit(limit)
             .all()
+        )
+
+    @staticmethod
+    def _pending_filter():
+        return (
+            (Post.llm_category_1.is_(None))
+            | (Post.llm_category_1 == "")
+            | (Post.llm_category_1 == "未分类")
+            | (Post.llm_category_2.is_(None))
+            | (Post.llm_category_2 == "")
+            | (Post.llm_category_2 == "未分类")
         )
 
     def _clean_text(self, text):

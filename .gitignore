@@ -29,6 +29,9 @@ model_Qwen3/lora/*
 !model_Qwen3/lora/requirements-qwen-lora.txt
 model_Qwen3/lora/data/
 model_Qwen3/lora/output/
+!model_Qwen3/lora/output/
+model_Qwen3/lora/output/*
+!model_Qwen3/lora/output/README.md
 Qwen3-4b-Instruct-2507/
 
 #日志与数据

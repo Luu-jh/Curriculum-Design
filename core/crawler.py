@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timedelta
 
 import requests
+import urllib3
 
 import config
 from core.models import Post, db
@@ -12,6 +13,9 @@ class CampusWallCrawler:
     def __init__(self, app):
         self.app = app
         self.today_str = datetime.now().strftime("%Y-%m-%d")
+        self.verify_ssl = getattr(config, "CRAWLER_VERIFY_SSL", True)
+        if not self.verify_ssl:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def run_incremental_crawl(self, backfill_days=None):
         """执行增量爬取逻辑；传入 backfill_days 时会回填到指定天数边界。"""
@@ -39,6 +43,7 @@ class CampusWallCrawler:
                         headers=config.HEADERS,
                         json={"page": page, "size": 20},
                         timeout=15,
+                        verify=self.verify_ssl,
                     )
                     resp.raise_for_status()
 
@@ -97,6 +102,14 @@ class CampusWallCrawler:
                     db.session.commit()
                     time.sleep(1)
 
+                except requests.exceptions.SSLError as e:
+                    print(
+                        f"  抓取第 {page} 页失败: SSL证书校验失败。"
+                        "如确认接口可信，可在 config.py 中设置 CRAWLER_VERIFY_SSL = False。"
+                        f" 原始错误: {e}"
+                    )
+                    db.session.rollback()
+                    break
                 except Exception as e:
                     print(f"  抓取第 {page} 页失败: {e}")
                     db.session.rollback()

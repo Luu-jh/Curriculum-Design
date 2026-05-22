@@ -8,6 +8,7 @@ import pandas as pd
 from pyecharts import options as opts
 from pyecharts.charts import Bar, Line, Pie, WordCloud
 
+from analysis.llm_qwen_classifier import LABEL_SCHEMA
 from core.models import Post, db
 
 
@@ -20,41 +21,13 @@ WORDCLOUD_STOP_WORDS = {
     "应该", "这种", "那个啥", "就是想", "一下哈", "一下啦", "一下呗", "一下呢", "今天", "明天", "昨天",
 }
 
-CATEGORY_DISPLAY_ORDER = [
-    "日常投稿",
-    "选课互助",
-    "二手闲置",
-    "恋爱交友",
-    "失物招领",
-    "出行跑腿",
-    "求助咨询",
-    "文娱吐槽",
-    "体测健康",
-    "其他小类",
-]
-
-CATEGORY_GROUP_RULES = [
-    ("日常投稿", ("日常投稿", "校园网", "宿舍", "新开水机", "干洗", "早点自助")),
-    ("选课互助", ("选课互助", "转专业", "小学期", "体育期末", "计算机考研", "python", "算法", "作业", "课程", "课间", "学习", "考研", "期末")),
-    ("二手闲置", ("二手闲置", "闲置", "求购", "转让", "电器", "拍立得", "洗衣液")),
-    ("恋爱交友", ("恋爱交友", "亲友访校", "搭子", "寻找队友", "队友", "交友")),
-    ("失物招领", ("失物招领", "找物", "寻物", "拿错", "遗失")),
-    ("出行跑腿", ("拼车", "跑腿", "快递", "外卖", "代取", "出行", "退货")),
-    ("求助咨询", ("求助", "求解", "求帮忙", "帮忙", "咨询", "请问")),
-    ("文娱吐槽", ("吃瓜爆料", "游戏", "kpl", "明日方舟", "抽象文案", "沧元图", "吐槽", "爆料", "赛事", "不要把梦想埋没")),
-    ("体测健康", ("体测", "体育", "健身")),
-]
-
-LLM_CATEGORY_ALIASES = {
-    "日常": "日常投稿",
-    "交易": "二手闲置",
-    "求助": "求助咨询",
-    "找人找物": "失物招领",
-    "吐槽": "文娱吐槽",
-    "其他": "其他小类",
-}
-
-OTHER_CATEGORY_LABEL = "其他小类"
+UNCLASSIFIED_LABEL = "未分类"
+CATEGORY_DISPLAY_ORDER = list(LABEL_SCHEMA.keys()) + [UNCLASSIFIED_LABEL]
+CATEGORY_2_DISPLAY_ORDER = [
+    label
+    for labels in LABEL_SCHEMA.values()
+    for label in labels
+] + [UNCLASSIFIED_LABEL]
 
 
 class DashboardData:
@@ -116,20 +89,20 @@ class DashboardData:
             return (
                 Pie()
                 .set_global_opts(
-                    title_opts=opts.TitleOpts(title="发帖类型占比", pos_left="center", pos_top="2%"),
+                    title_opts=opts.TitleOpts(title="LLM一级分类占比", pos_left="center", pos_top="2%"),
                     legend_opts=opts.LegendOpts(pos_left="left", pos_top="18%"),
                 )
                 .dump_options()
             )
 
-        counts = DashboardData._ordered_counts(df["display_category_1"].value_counts())
+        counts = DashboardData._ordered_counts(df["display_category_1"].value_counts(), CATEGORY_DISPLAY_ORDER)
         data_pair = [[str(label), int(count)] for label, count in counts.items()]
 
         pie = (
             Pie()
             .add("", data_pair, radius=["36%", "64%"], center=["58%", "57%"])
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="发帖类型占比", pos_left="center", pos_top="2%"),
+                title_opts=opts.TitleOpts(title="LLM一级分类占比", pos_left="center", pos_top="2%"),
                 legend_opts=opts.LegendOpts(
                     type_="scroll",
                     orient="vertical",
@@ -147,21 +120,20 @@ class DashboardData:
         """Generate a drill-down bar chart for second-level categories."""
         df = DashboardData.get_raw_df()
         if df.empty:
-            return DashboardData._empty_bar("二级分类分布").dump_options()
+            return DashboardData._empty_bar("LLM二级分类分布").dump_options()
 
         filtered = df
-        title = "二级分类分布"
+        title = "LLM二级分类分布"
         if category_1:
             filtered = df[df["display_category_1"] == category_1]
-            title = f"{category_1} 下的二级分类"
+            title = f"{category_1} 下的 LLM二级分类"
 
         if filtered.empty:
             return DashboardData._empty_bar(title).dump_options()
 
-        counts = DashboardData._compact_counts(
+        counts = DashboardData._ordered_counts(
             filtered["display_category_2"].fillna("未分类").value_counts(),
-            max_items=12,
-            min_count=2,
+            CATEGORY_2_DISPLAY_ORDER,
         )
         labels = [str(label) for label in counts.index.tolist()]
         values = [int(value) for value in counts.tolist()]
@@ -251,68 +223,35 @@ class DashboardData:
 
     @staticmethod
     def _display_category_1(row):
-        llm_category = str(row.get("llm_category_1") or "").strip()
-        raw_category = str(row.get("category") or "").strip()
-        if llm_category and llm_category != "未分类":
-            return DashboardData._group_category(llm_category, raw_category)
-        return DashboardData._group_category(raw_category)
+        return DashboardData._display_label(row.get("llm_category_1"))
 
     @staticmethod
     def _display_category_2(row):
-        llm_category = str(row.get("llm_category_2") or "").strip()
-        raw_category = str(row.get("category") or "").strip()
-        if llm_category and llm_category != "未分类":
-            return llm_category
-        return raw_category or "未分类"
+        return DashboardData._display_label(row.get("llm_category_2"))
 
     @staticmethod
-    def _group_category(label, raw_label=""):
+    def _display_label(label):
         label = str(label or "").strip()
-        raw_label = str(raw_label or "").strip()
-        text = f"{label} {raw_label}".strip()
-        if not text or text == "未分类":
-            return OTHER_CATEGORY_LABEL
-
-        if label in LLM_CATEGORY_ALIASES:
-            return LLM_CATEGORY_ALIASES[label]
-
-        normalized = text.lower()
-        if label.startswith("出") and not label.startswith("出行"):
-            return "二手闲置"
-
-        for group_name, keywords in CATEGORY_GROUP_RULES:
-            if any(str(keyword).lower() in normalized for keyword in keywords):
-                return group_name
-        return OTHER_CATEGORY_LABEL
+        if not label or label.lower() == "nan":
+            return UNCLASSIFIED_LABEL
+        return label
 
     @staticmethod
-    def _ordered_counts(counts):
+    def _ordered_counts(counts, display_order):
         ordered_items = []
         used_labels = set()
-        for label in CATEGORY_DISPLAY_ORDER:
+        for label in display_order:
             if label in counts:
                 ordered_items.append((label, int(counts[label])))
                 used_labels.add(label)
 
-        remaining_total = sum(int(count) for label, count in counts.items() if label not in used_labels)
-        if remaining_total:
-            for index, (label, count) in enumerate(ordered_items):
-                if label == OTHER_CATEGORY_LABEL:
-                    ordered_items[index] = (label, count + remaining_total)
-                    break
-            else:
-                ordered_items.append((OTHER_CATEGORY_LABEL, remaining_total))
+        remaining_items = [
+            (str(label), int(count))
+            for label, count in counts.items()
+            if label not in used_labels
+        ]
+        ordered_items.extend(sorted(remaining_items, key=lambda item: item[1], reverse=True))
         return pd.Series(dict(ordered_items), dtype="int64")
-
-    @staticmethod
-    def _compact_counts(counts, max_items=12, min_count=2):
-        if counts.empty:
-            return counts
-        head = counts[(counts >= min_count)].head(max_items)
-        other_total = int(counts.drop(head.index, errors="ignore").sum())
-        if other_total:
-            head.loc[OTHER_CATEGORY_LABEL] = other_total
-        return head
 
     @staticmethod
     def _empty_line(days):

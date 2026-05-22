@@ -41,6 +41,8 @@
         .agent-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; }
         .agent-stack { display: flex; flex-direction: column; gap: 20px; }
         .agent-summary { color: #2c3e50; line-height: 1.8; margin: 0; }
+        .primary-action { margin-top: 12px; padding: 10px 12px; background: #eef6ff; border-left: 4px solid #3498db; border-radius: 6px; color: #22313f; line-height: 1.7; }
+        .primary-action strong { margin-right: 4px; }
         .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
         .metric-box { background: #f7f9fb; border: 1px solid #edf1f5; border-radius: 6px; padding: 10px; min-height: 58px; }
         .metric-label { display: block; color: #7f8c8d; font-size: 12px; margin-bottom: 6px; }
@@ -56,6 +58,7 @@
         .item-desc { color: #4b5563; line-height: 1.6; margin: 8px 0 0; font-size: 14px; }
         .evidence-list { margin: 8px 0 0; padding-left: 18px; color: #5f6368; font-size: 13px; line-height: 1.6; }
         .suggestion-list { margin: 0; padding-left: 20px; color: #34495e; line-height: 1.8; }
+        .suggestion-list li { margin-bottom: 8px; }
         .empty-state { color: #8a97a5; text-align: center; padding: 18px 0; }
         .qa-panel { margin-bottom: 20px; }
         .qa-input-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: stretch; }
@@ -100,7 +103,7 @@
 
                 <div style="display: flex; flex-direction: column; gap: 20px;">
                     <div class="card">
-                        <p class="chart-tip">点击饼图分块，可联动查看该一级分类下的二级分类柱状图。</p>
+                        <p class="chart-tip">点击 LLM 一级分类分块，可联动查看该分类下的 LLM 二级分类。</p>
                         <div id="pie-chart" class="chart-container" style="height: 250px;"></div>
                     </div>
 
@@ -160,6 +163,9 @@
                             <span id="agent-risk-level" class="risk-badge risk-low">低</span>
                         </div>
                         <p id="agent-summary" class="agent-summary">暂无报告。</p>
+                        <div id="agent-primary-action" class="primary-action">
+                            <strong>首要处置：</strong><span>暂无明确建议。</span>
+                        </div>
                         <div class="metric-grid">
                             <div class="metric-box">
                                 <span class="metric-label">帖子数量</span>
@@ -223,11 +229,16 @@
         const pieChart = echarts.init(document.getElementById('pie-chart'));
         const category2Chart = echarts.init(document.getElementById('category2-chart'));
         const wordCloudChart = echarts.init(document.getElementById('wordcloud-chart'));
-        const agentState = { period: 'week', loaded: false };
+        const agentState = {
+            period: 'week',
+            loaded: false,
+            autoLlmPeriods: {},
+            llmRefreshing: false
+        };
 
         function fetchAndRenderChart(url, chartInstance) {
             chartInstance.showLoading();
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(response => response.json())
                 .then(options => {
                     chartInstance.hideLoading();
@@ -265,11 +276,16 @@
 
             const status = document.getElementById('agent-status');
             status.textContent = '正在读取智能体报告...';
-            fetch('/api/agent/report?period=' + encodeURIComponent(agentState.period))
+            const requestPeriod = agentState.period;
+            fetch('/api/agent/report?period=' + encodeURIComponent(requestPeriod))
                 .then(response => response.json())
                 .then(report => {
+                    if (requestPeriod !== agentState.period) {
+                        return;
+                    }
                     renderAgentReport(report);
                     agentState.loaded = true;
+                    autoRefreshAgentReport(report, requestPeriod);
                 })
                 .catch(err => {
                     console.error('智能体报告加载失败:', err);
@@ -277,25 +293,55 @@
                 });
         }
 
-        function refreshAgentReport() {
+        function autoRefreshAgentReport(report, period) {
+            if (!report || report.source === 'llm' || Number(report.post_count || 0) <= 0) {
+                return;
+            }
+            if (agentState.autoLlmPeriods[period]) {
+                return;
+            }
+            agentState.autoLlmPeriods[period] = true;
+            refreshAgentReport(true, period);
+        }
+
+        function refreshAgentReport(autoMode, targetPeriod) {
             const refreshBtn = document.getElementById('agent-refresh-btn');
             const status = document.getElementById('agent-status');
-            refreshBtn.disabled = true;
-            status.textContent = '正在基于最新数据库刷新智能体分析，大模型不可用时会自动降级...';
-            fetch('/api/agent/refresh?period=' + encodeURIComponent(agentState.period) + '&llm=1', { method: 'POST' })
+            if (agentState.llmRefreshing) {
+                status.textContent = '大模型分析正在进行中，请稍后再刷新。';
+                return;
+            }
+            const isAutoMode = autoMode === true;
+            const requestPeriod = targetPeriod || agentState.period;
+            agentState.llmRefreshing = true;
+            if (!isAutoMode) {
+                refreshBtn.disabled = true;
+                refreshBtn.textContent = '分析中';
+            }
+            status.textContent = isAutoMode
+                ? '已展示规则分析，正在自动调用 Qwen 生成处置建议...'
+                : '正在基于最新数据库刷新智能体分析，大模型不可用时会自动降级...';
+            fetch('/api/agent/refresh?period=' + encodeURIComponent(requestPeriod) + '&llm=1', { method: 'POST' })
                 .then(response => response.json().then(data => ({ ok: response.ok, data })))
                 .then(result => {
                     if (!result.ok) {
                         throw new Error(result.data.message || '刷新失败');
                     }
+                    if (requestPeriod !== agentState.period) {
+                        return;
+                    }
                     renderAgentReport(result.data);
                 })
                 .catch(err => {
                     console.error('智能体报告刷新失败:', err);
-                    status.textContent = err.message || '智能体报告刷新失败。';
+                    status.textContent = isAutoMode
+                        ? '大模型自动分析未成功，当前保留规则处置建议：' + (err.message || '模型调用失败。')
+                        : (err.message || '智能体报告刷新失败。');
                 })
                 .finally(() => {
+                    agentState.llmRefreshing = false;
                     refreshBtn.disabled = false;
+                    refreshBtn.textContent = '刷新分析';
                 });
         }
 
@@ -382,9 +428,11 @@
             riskBadge.textContent = riskLevel;
             riskBadge.className = 'risk-badge ' + riskClass(riskLevel);
 
+            const suggestions = normalizeSuggestions(report);
+            renderPrimaryAction(suggestions, report.risks || []);
             renderTopics(report.hot_topics || []);
             renderRisks(report.risks || []);
-            renderSuggestions(report.suggestions || []);
+            renderSuggestions(suggestions);
             renderRepresentativePosts(report.representative_posts || []);
 
             const sourceText = report.source === 'llm' ? 'Qwen 智能体' : '规则智能体';
@@ -439,6 +487,24 @@
                 return;
             }
             container.innerHTML = suggestions.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+        }
+
+        function normalizeSuggestions(report) {
+            const suggestions = (report.suggestions || []).filter(Boolean);
+            if (suggestions.length) {
+                return suggestions;
+            }
+            return (report.risks || [])
+                .map(risk => risk.suggestion)
+                .filter(Boolean);
+        }
+
+        function renderPrimaryAction(suggestions, risks) {
+            const container = document.getElementById('agent-primary-action');
+            const span = container.querySelector('span');
+            const primaryRisk = (risks || []).find(risk => risk && risk.suggestion);
+            const text = suggestions[0] || (primaryRisk ? primaryRisk.suggestion : '暂无明确建议。');
+            span.textContent = text;
         }
 
         function renderRepresentativePosts(posts) {
@@ -513,6 +579,7 @@
             fetchAndRenderChart('/api/chart/pie', pieChart);
             loadCategory2Chart();
             fetchAndRenderChart('/api/chart/wordcloud', wordCloudChart);
+            loadAgentReport(agentState.period);
 
             window.addEventListener('resize', function() {
                 lineChart.resize();

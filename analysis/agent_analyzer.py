@@ -21,6 +21,8 @@ PERIOD_DAYS = {
     "month": 30,
 }
 
+UNCLASSIFIED_LABEL = "未分类"
+
 
 class AgentAnalyzer:
     """Generate campus-wall public-opinion reports from stored post data."""
@@ -203,16 +205,14 @@ class AgentAnalyzer:
         raw_category = post.category or "未分类"
         llm_category_1 = self._clean_label(post.llm_category_1)
         llm_category_2 = self._clean_label(post.llm_category_2)
-        display_category_1 = llm_category_1 if llm_category_1 != "未分类" else raw_category
-        display_category_2 = llm_category_2 if llm_category_2 != "未分类" else raw_category
         return {
             "id": post.id,
             "snippet": self._snippet(post.content, 90),
             "raw_category": raw_category,
             "llm_category_1": llm_category_1,
             "llm_category_2": llm_category_2,
-            "display_category_1": display_category_1,
-            "display_category_2": display_category_2,
+            "display_category_1": llm_category_1,
+            "display_category_2": llm_category_2,
             "sentiment": post.sentiment or "未分类",
             "views": post.views or 0,
             "comments": post.comments or 0,
@@ -250,9 +250,9 @@ class AgentAnalyzer:
         for item in items:
             category_1 = item["display_category_1"]
             category_2 = item["display_category_2"]
-            if category_1 == "未分类" and category_2 == "未分类":
-                key = item["raw_category"] or "未分类"
-                topic_name = key
+            if category_1 == UNCLASSIFIED_LABEL and category_2 == UNCLASSIFIED_LABEL:
+                key = UNCLASSIFIED_LABEL
+                topic_name = UNCLASSIFIED_LABEL
             elif category_2 == "未分类":
                 key = category_1
                 topic_name = category_1
@@ -394,17 +394,40 @@ class AgentAnalyzer:
         return risks[:4]
 
     def _build_suggestions(self, material, negative_ratio):
-        suggestions = [
-            "优先跟踪高互动帖子，结合评论数、点赞数和浏览量判断扩散程度。",
-            "对一级分类和二级分类持续做人工抽样校验，避免模型分类偏差影响研判。",
-        ]
+        post_count = material["post_count"]
         subcategory_counts = material["metrics"]["subcategory_distribution"]
+        hot_posts = material["hot_posts"]
+        hot_post_ids = [
+            str(item["id"])
+            for item in hot_posts[:3]
+            if item.get("id") is not None
+        ]
+        hot_post_text = "、".join(hot_post_ids) if hot_post_ids else "当前高热帖子"
+
+        if post_count == 0:
+            return [
+                "第1步 立即处置：暂无可分析帖子，先确认爬虫接口、Cookie 和数据库写入是否正常。",
+                "第2步 后续跟踪：等待采集到帖子后再刷新智能体分析，避免基于空数据做判断。",
+            ]
+
+        suggestions = []
+        step = 1
         if negative_ratio >= 0.25:
-            suggestions.insert(0, "将负向高热帖子作为每日巡检重点，及时提取具体诉求和责任场景。")
+            suggestions.append(f"第{step}步 立即处置：将负向高热帖子列为优先巡检对象，提取具体诉求、责任场景和可能涉及部门。")
+            step += 1
+
+        suggestions.extend(
+            [
+                f"第{step}步 重点核查：先查看帖子 {hot_post_text}，确认是否存在具体诉求、争议点或需要人工回复的内容。",
+                f"第{step + 1}步 今日跟踪：每 2-3 小时复看高互动帖子，结合评论数、点赞数和浏览量判断扩散程度。",
+                f"第{step + 2}步 持续校验：抽样复核一级分类和二级分类，避免模型分类偏差影响风险研判。",
+            ]
+        )
+
         if subcategory_counts.get("问题咨询", 0) >= 5:
-            suggestions.append("把高频咨询问题整理成公告或 FAQ，减少重复提问和信息不对称。")
+            suggestions.append("专项处理：把高频咨询问题整理成公告或 FAQ，减少重复提问和信息不对称。")
         if subcategory_counts.get("代办", 0) >= 3:
-            suggestions.append("对代课、代跑、代取等高频内容增加规则提醒，降低违规和纠纷风险。")
+            suggestions.append("专项处理：对代课、代跑、代取等高频内容增加规则提醒，降低违规和纠纷风险。")
         return suggestions[:5]
 
     def _topic_evidence(self, material, keyword):
@@ -450,7 +473,8 @@ class AgentAnalyzer:
             "2. summary 用 1 到 2 句话概括，必须包含帖子数量、主要类别和风险等级。\n"
             "3. sentiment_tone 只能是：平稳、略有波动、偏负向、偏正向。\n"
             "4. risk_level 只能是：低、中、高。\n"
-            "5. suggestions 输出 2 到 3 条短建议。\n"
+            "5. suggestions 输出 3 到 5 条可执行处置建议，每条必须包含明确动作、处理对象或跟踪频率。\n"
+            "7. suggestions 建议使用“第1步 立即处置：...”“第2步 今日跟踪：...”“专项处理：...”这类格式。\n"
             "6. 只输出严格JSON，不要输出Markdown或解释。\n\n"
             "输出JSON结构："
             "{\"overview\":{\"summary\":\"\",\"sentiment_tone\":\"平稳\",\"risk_level\":\"低\"},"
@@ -594,7 +618,7 @@ class AgentAnalyzer:
     @staticmethod
     def _clean_label(label):
         label = (label or "").strip()
-        return label if label else "未分类"
+        return label if label else UNCLASSIFIED_LABEL
 
     @staticmethod
     def _snippet(text, limit):
